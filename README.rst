@@ -110,3 +110,13 @@ Hacking
 
  - python setup.py register # if the project does not yet exist
  - trim old versions at https://pypi.python.org/pypi/github2gitlab
+
+
+## Compiling
+```
+rm -r dist
+rm -r build
+python3 setup.py sdist bdist_wheel
+python -m twine upload dist/\*
+pip install -e .
+```

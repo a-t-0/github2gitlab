@@ -107,7 +107,7 @@ class GitHub2GitLab(object):
                             help='GitHub repo (for instance ceph/ceph)',
                             required=True)
         parser.add_argument('--ssh-public-key',
-                            default='~/.ssh/id_rsa.pub',
+                            default='~/.ssh/id_ed25519.pub',
                             help='SSH public key')
         parser.add_argument('--branches',
                             help=('comma separated list of git branches '
@@ -135,8 +135,9 @@ class GitHub2GitLab(object):
 
     def run(self):
         self.add_key()
-        if self.add_project():
-            self.unprotect_branches()
+        # if self.add_project():
+            #  self.unprotect_branches()
+        #    pass
         self.git_mirror()
         if not self.args.skip_pull_requests:
             self.pull_requests = self.get_pull_requests()
