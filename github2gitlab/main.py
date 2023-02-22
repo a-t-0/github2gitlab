@@ -18,6 +18,7 @@
 # along with this program.  If not, see `<http://www.gnu.org/licenses/>`.
 #
 import argparse
+from typing import Dict, Optional
 import git
 import gitdb
 import hashlib
@@ -50,7 +51,6 @@ class GitHub2GitLab(object):
 
     def __init__(self, args):
         self.args = args
-
         self.args.ssh_public_key = os.path.expanduser(
             self.args.ssh_public_key
         )
@@ -60,13 +60,15 @@ class GitHub2GitLab(object):
         (self.args.gitlab_namespace,
          self.args.gitlab_name) = self.args.gitlab_repo.split('/')
         self.args.gitlab_repo = parse.quote_plus(self.args.gitlab_repo)
-
+        print(f'self.args.gitlab_name={self.args.gitlab_name}')
+        print(f'self.args.gitlab_namespace={self.args.gitlab_namespace}')
         self.github = {
             'url': "https://api.github.com",
             'git': "https://github.com",
             'repo': self.args.github_repo,
             'token': self.args.github_token,
         }
+
         if self.args.branches:
             self.github['branches'] = self.args.branches.split(',')
         self.gitlab = {
@@ -77,6 +79,7 @@ class GitHub2GitLab(object):
             'url': self.args.gitlab_url + "/api/v4",
             'repo': self.args.gitlab_repo,
             'token': self.args.gitlab_token,
+            'username': self.args.gitlab_username
         }
 
         if self.args.verbose:
@@ -95,6 +98,9 @@ class GitHub2GitLab(object):
 
         parser.add_argument('--gitlab-url',
                             help='Gitlab url',
+                            required=True)
+        parser.add_argument('--gitlab-username',
+                            help='Gitlab username',
                             required=True)
         parser.add_argument('--gitlab-token',
                             help='Gitlab authentication token',
@@ -135,9 +141,9 @@ class GitHub2GitLab(object):
 
     def run(self):
         self.add_key()
-        # if self.add_project():
-            #  self.unprotect_branches()
-        #    pass
+        if self.add_project():
+            # self.unprotect_branches()
+           pass
         self.git_mirror()
         if not self.args.skip_pull_requests:
             self.pull_requests = self.get_pull_requests()
@@ -180,10 +186,17 @@ class GitHub2GitLab(object):
 
     def git_mirror(self):
         name = self.gitlab['name']
+        
+        # TODO: include arg with default value to True for auto delete local
+        # repo if it already exists.
+        if os.path.exists(name):
+            shutil.rmtree(name)
+            
         if not os.path.exists(name):
             self.sh("git clone --bare " + self.github['git'] +
                     "/" + self.github['repo'] + " " + name)
         repo = git.Repo(name)
+        print(f'repo={repo}')
         os.chdir(name)
         if not hasattr(repo.remotes, 'gitlab'):
             self.gitlab_create_remote(repo)
@@ -207,6 +220,8 @@ class GitHub2GitLab(object):
             self.git_mirror_optimize(repo)
         else:
             self.sh("git fetch origin +refs/pull/*:refs/heads/pull/*")
+        
+        print(f'PUSHING.')
         #
         # Push
         #
@@ -265,6 +280,11 @@ class GitHub2GitLab(object):
         query = {'private_token': g['token']}
         keys = requests.get(url, params=query).json()
         log.debug("looking for '" + public_key + "' in " + str(keys))
+        if isinstance(keys,Dict) and "message" in keys.keys():
+            if keys["message"] == "401 Unauthorized":
+                raise ValueError(
+                    f"Error, GitLab token:{g['token']} is not valid. Please"
+                    +" try again with valid --gitlab-token argument.")
         if (list(filter(lambda key: key['key'] == public_key, keys))):
             log.debug(self.args.ssh_public_key + " already exists")
             return None
@@ -281,7 +301,7 @@ class GitHub2GitLab(object):
                          .format(self.args.ssh_public_key))
             return public_key
 
-    def add_project(self):
+    def add_project(self, is_retry:Optional[bool]=False):
         "Create project in gitlab if it does not exist"
         g = self.gitlab
         url = g['url'] + "/projects/" + g['repo']
@@ -295,13 +315,32 @@ class GitHub2GitLab(object):
             query['public'] = 'true'
             query['namespace'] = g['namespace']
             query['name'] = g['name']
+            print(f'query={query}')
+            print(f'url={url}')
             result = requests.post(url, params=query)
             if result.status_code != requests.codes.created:
-                raise ValueError(result.text)
+                
+                # Delete the GitLab repo and try to push again, if already is
+                # retry, raise exception.
+                if not is_retry:
+                    self.delete_gitlab_repo_if_exists(g=g)
+                    time.sleep(5)
+                    self.add_project(is_retry=True)
+                else:
+                    raise ValueError(result.text)
             log.debug("project " + g['repo'] + " added: " +
                       result.text)
             return result.json()
 
+    def delete_gitlab_repo_if_exists(self, g:Dict):
+        """Deletes a GitLab repository if it exists."""
+        command=("curl --silent -H "+"'Content-Type: application/json'"+
+                f' -H "Private-Token: {g["token"]}"'+ ' -X DELETE "'
+                +f'{g["url"]}/projects/{g["username"]}%2F{g["name"]}"'
+                )
+        print(f'command={command}')
+        self.sh(command)
+        
     def unprotect_branches(self):
         "Unprotect branches of the GitLab project"
         g = self.gitlab

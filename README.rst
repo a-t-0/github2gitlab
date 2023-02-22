@@ -120,3 +120,7 @@ python3 setup.py sdist bdist_wheel
 python -m twine upload dist/\*
 pip install -e .
 ```
+or:
+```
+rm -r dist && rm -r build && python3 setup.py sdist bdist_wheel && pip install -e .
+```
